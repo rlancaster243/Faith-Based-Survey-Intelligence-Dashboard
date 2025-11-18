@@ -39,29 +39,48 @@ st.markdown("""
 def load_data():
     # Robust file path handling for local/cloud execution
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # USING THE ORIGINAL UPLOADED FILENAME
+    # UPDATED FILENAME
     file_path = os.path.join(current_dir, 'cleaned_survey_data.csv')
     
-    # Check if file exists
     if not os.path.exists(file_path):
         st.error(f"❌ File not found: {file_path}")
-        st.info("Please ensure 'rls_tableau_weighted_core1.csv' is in the same directory as app.py.")
+        st.info("Please ensure 'cleaned_survey_data.csv' is in the same directory as app.py.")
         return pd.DataFrame()
 
     df = pd.read_csv(file_path)
     
-    # --- CRITICAL FIX: Handle Missing Values for Visualizations ---
-    # Fill NaNs in categorical columns to prevent Plotly Sunburst/ParCats crashes
-    cols_to_fix = [
-        'how_important_is_the_bible_in_your_life', 
-        'decade_in_which_respondent_was_born',
-        'how_important_is_religion_in_your_life'
-    ]
-    for col in cols_to_fix:
-        if col in df.columns:
-            df[col] = df[col].fillna("Unspecified")
+    # CLEANING: Strip whitespace from column names just in case
+    df.columns = df.columns.str.strip()
+    
+    # --- COLUMN MAPPING (New Schema) ---
+    # This makes the code readable and easier to update if column names change again
+    cols = {
+        'year': 'year_survey_completed',
+        'decade': 'decade_of_birth',
+        'religion_imp': 'how_important_is_religion_in_your_life',
+        'attend_person': 'how_often_do_you_attend_religious_services_in_person',
+        'attend_online': 'how_often_do_you_watch_religious_services',
+        'bible_imp': 'how_important_is_the_bible_in_your_life',
+        'happiness': 'generally_how_happy_are_you',
+        'health': 'how_would_you_classify_your_health',
+        'family': 'what_is_your_family_life_like',
+        'weight': 'weight_final'
+    }
 
-    # --- Mappings for Ordinal Variables to Numeric Scores (0-5 Scale) ---
+    # Validate required columns exist
+    required_values = list(cols.values())
+    missing_cols = [c for c in required_values if c not in df.columns]
+    if missing_cols:
+        st.error(f"❌ Missing columns in CSV: {missing_cols}")
+        st.write("Available columns:", df.columns.tolist())
+        return pd.DataFrame()
+
+    # CLEANING: Handle Missing Values for Categorical Columns
+    cat_cols_to_fix = [cols['bible_imp'], cols['decade'], cols['religion_imp']]
+    for col in cat_cols_to_fix:
+        df[col] = df[col].fillna("Unspecified")
+
+    # --- SCORING MAPPINGS (Ordinal -> Numeric) ---
     maps = {
         'happiness': {'Very happy': 3, 'Pretty happy': 2, 'Not too happy': 1},
         'health_family': {'Excellent': 5, 'Very good': 4, 'Good': 3, 'Fair': 2, 'Poor': 1},
@@ -69,37 +88,57 @@ def load_data():
         'freq': {'More than once a week': 6, 'Once a week': 5, 'Once or twice a month': 4, 'A few times a year': 3, 'Seldom': 2, 'Never': 1}
     }
 
-    # Apply Mappings safely
-    if 'generally_how_happy_are_you_with_your_life_these_days_are_you' in df.columns:
-        df['happiness_score'] = df['generally_how_happy_are_you_with_your_life_these_days_are_you'].map(maps['happiness'])
-        df['health_score'] = df['would_you_say_your_health_in_general_is_excellent_very_good_good_fair'].map(maps['health_family'])
-        df['family_score'] = df['would_you_say_your_family_life_is_excellent_very_good_good_fair_or'].map(maps['health_family'])
-        df['bible_score'] = df['how_important_is_the_bible_in_your_life'].map(maps['importance'])
-        df['online_score'] = df['how_often_do_you_watch_or_participate_in_religious_services_online_or'].map(maps['freq'])
-        df['in_person_score'] = df['how_often_do_you_attend_religious_services_in_person'].map(maps['freq'])
+    # Apply Mappings
+    df['happiness_score'] = df[cols['happiness']].map(maps['happiness'])
+    df['bible_score'] = df[cols['bible_imp']].map(maps['importance'])
+    df['online_score'] = df[cols['attend_online']].map(maps['freq'])
+    df['in_person_score'] = df[cols['attend_person']].map(maps['freq'])
+    df['health_score'] = df[cols['health']].map(maps['health_family'])
+    df['family_score'] = df[cols['family']].map(maps['health_family'])
 
-        # Create Segments for Analysis
-        df['Scripture Engagement'] = np.where(df['bible_score'] >= 4, 'High Engagement', 'Low Engagement')
-        
-        def get_digital_segment(row):
-            if pd.isna(row['online_score']) or pd.isna(row['in_person_score']):
-                return 'Disconnected'
-            if row['online_score'] >= 5 and row['in_person_score'] <= 2:
-                return 'Digital First'
-            elif row['online_score'] >= 4 and row['in_person_score'] >= 4:
-                return 'Hybrid'
-            elif row['in_person_score'] >= 4:
-                return 'In-Person Only'
-            else:
-                return 'Disconnected'
-                
-        df['User Type'] = df.apply(get_digital_segment, axis=1)
+    # Fill numeric NaNs with 0 for calculation safety
+    numeric_cols = ['happiness_score', 'bible_score', 'online_score', 'in_person_score', 'health_score', 'family_score']
+    for col in numeric_cols:
+        df[col] = df[col].fillna(0)
+
+    # --- SEGMENTATION LOGIC ---
+    df['Scripture Engagement'] = np.where(df['bible_score'] >= 4, 'High Engagement', 'Low Engagement')
     
-    return df
+    def get_digital_segment(row):
+        o_score = row['online_score']
+        p_score = row['in_person_score']
+        
+        if o_score == 0 and p_score == 0: return 'Disconnected'
+        
+        if o_score >= 5 and p_score <= 2:
+            return 'Digital First'
+        elif o_score >= 4 and p_score >= 4:
+            return 'Hybrid'
+        elif p_score >= 4:
+            return 'In-Person Only'
+        else:
+            return 'Disconnected'
+            
+    df['User Type'] = df.apply(get_digital_segment, axis=1)
+    
+    return df, cols
 
-df = load_data()
+# Load data and column mapping
+data_result = load_data()
 
-# Stop if data failed to load
+# Graceful exit if data loading failed
+if isinstance(data_result, pd.DataFrame): # Should be tuple if successful
+    if data_result.empty:
+        st.stop()
+    else: 
+        # Fallback if something weird happened, though load_data returns tuple on success
+        df = data_result
+        # We need the cols dict, re-define if lost (shouldn't happen with correct return)
+        st.error("Data loading return format error.")
+        st.stop()
+else:
+    df, cols = data_result
+
 if df.empty:
     st.stop()
 
@@ -110,26 +149,20 @@ with st.sidebar:
     st.title("Analyst Portal")
     st.write("Exploratory Analysis of Faith, Tech, and Life Outcomes.")
     
-    # Ensure year is integer for cleaner display
-    if 'year_in_which_survey_was_completed' in df.columns:
-        unique_years = sorted(df['year_in_which_survey_was_completed'].unique())
-        selected_years = st.multiselect("Select Years", options=unique_years, default=unique_years)
-    else:
-        selected_years = []
-        
-    # Filter out 'Unspecified' generations for cleaner dropdown
-    if 'decade_in_which_respondent_was_born' in df.columns:
-        gen_options = [x for x in df['decade_in_which_respondent_was_born'].unique() if x != "Unspecified"]
-        selected_gens = st.multiselect("Select Generations", options=sorted(gen_options), default=['1980s', '1990s', '2000s'])
-    else:
-        selected_gens = []
+    # Filter Years
+    unique_years = sorted(df[cols['year']].unique())
+    selected_years = st.multiselect("Select Years", options=unique_years, default=unique_years)
+    
+    # Filter Generations
+    gen_options = [x for x in df[cols['decade']].unique() if x != "Unspecified"]
+    selected_gens = st.multiselect("Select Generations", options=sorted(gen_options), default=['1980s', '1990s', '2000s'])
 
     # Apply Filters
     df_filtered = df.copy()
     if selected_years:
-        df_filtered = df_filtered[df_filtered['year_in_which_survey_was_completed'].isin(selected_years)]
+        df_filtered = df_filtered[df_filtered[cols['year']].isin(selected_years)]
     if selected_gens:
-        df_filtered = df_filtered[df_filtered['decade_in_which_respondent_was_born'].isin(selected_gens)]
+        df_filtered = df_filtered[df_filtered[cols['decade']].isin(selected_gens)]
 
 # -----------------------------------------------------------------------------
 # 4. MAIN DASHBOARD TABS
@@ -151,10 +184,10 @@ with tab1:
     col1, col2, col3 = st.columns(3)
     
     # VISUAL 1: Metrics
-    total_pop = df_filtered['weight_final'].sum()
+    total_pop = df_filtered[cols['weight']].sum()
     high_bible_pct = 0
     if total_pop > 0:
-        high_bible_pct = (df_filtered[df_filtered['Scripture Engagement'] == 'High Engagement']['weight_final'].sum() / total_pop) * 100
+        high_bible_pct = (df_filtered[df_filtered['Scripture Engagement'] == 'High Engagement'][cols['weight']].sum() / total_pop) * 100
     avg_happy = df_filtered['happiness_score'].mean()
     
     col1.metric("Total Population Rep.", f"{int(total_pop):,}")
@@ -164,7 +197,7 @@ with tab1:
     col_a, col_b = st.columns([1, 1])
     
     with col_a:
-        # VISUAL 2: Radar Chart (The Flourishing Profile)
+        # VISUAL 2: Radar Chart
         st.subheader("1. The Flourishing Profile")
         radar_df = df_filtered.groupby('Scripture Engagement')[['happiness_score', 'health_score', 'family_score']].mean().reset_index()
         
@@ -183,25 +216,24 @@ with tab1:
         st.plotly_chart(fig_radar, use_container_width=True)
 
     with col_b:
-        # VISUAL 3: Violin Plot (Happiness Distribution)
+        # VISUAL 3: Violin Plot
         st.subheader("2. Happiness Distribution")
-        # Drop Unspecified for this specific chart to keep x-axis clean
-        violin_df = df_filtered[df_filtered["how_important_is_the_bible_in_your_life"] != "Unspecified"]
+        violin_df = df_filtered[df_filtered[cols['bible_imp']] != "Unspecified"]
         
-        fig_violin = px.violin(violin_df, y="happiness_score", x="how_important_is_the_bible_in_your_life", 
+        fig_violin = px.violin(violin_df, y="happiness_score", x=cols['bible_imp'], 
                                color="Scripture Engagement", box=True, points=False,
-                               category_orders={"how_important_is_the_bible_in_your_life": ["Not at all important", "Somewhat important", "Extremely important"]},
+                               category_orders={cols['bible_imp']: ["Not at all important", "Somewhat important", "Extremely important"]},
                                title="Happiness density by Scripture Importance")
         st.plotly_chart(fig_violin, use_container_width=True)
         
-    # VISUAL 4: The Engagement Funnel
+    # VISUAL 4: Funnel
     st.subheader("3. The Disciple's Funnel")
     funnel_data = {
         'Stage': ['Religion Important', 'Attends Service (Any)', 'High Scripture Engagement'],
         'Count': [
-            df_filtered[df_filtered['how_important_is_religion_in_your_life'].isin(['Very important', 'Somewhat important'])]['weight_final'].sum(),
-            df_filtered[df_filtered['User Type'] != 'Disconnected']['weight_final'].sum(),
-            df_filtered[df_filtered['Scripture Engagement'] == 'High Engagement']['weight_final'].sum()
+            df_filtered[df_filtered[cols['religion_imp']].isin(['Very important', 'Somewhat important'])][cols['weight']].sum(),
+            df_filtered[df_filtered['User Type'] != 'Disconnected'][cols['weight']].sum(),
+            df_filtered[df_filtered['Scripture Engagement'] == 'High Engagement'][cols['weight']].sum()
         ]
     }
     fig_funnel = px.funnel(funnel_data, x='Count', y='Stage', color='Stage')
@@ -214,17 +246,16 @@ with tab2:
     col_c, col_d = st.columns(2)
     
     with col_c:
-        # VISUAL 5: Parallel Categories (The Ecosystem Flow)
+        # VISUAL 5: Parallel Categories
         st.subheader("4. Ecosystem Flow: Gen -> Faith -> Habits")
-        # Filter for visual clarity and to remove 'Unspecified' noise
         parcat_df = df_filtered[
-            (df_filtered['decade_in_which_respondent_was_born'] != 'Unspecified') & 
-            (df_filtered['how_important_is_religion_in_your_life'] != 'Unspecified')
+            (df_filtered[cols['decade']] != 'Unspecified') & 
+            (df_filtered[cols['religion_imp']] != 'Unspecified')
         ]
         
         fig_parcats = px.parallel_categories(
             parcat_df.sample(n=min(2000, len(parcat_df))), 
-            dimensions=['decade_in_which_respondent_was_born', 'how_important_is_religion_in_your_life', 'User Type'],
+            dimensions=[cols['decade'], cols['religion_imp'], 'User Type'],
             color="happiness_score", 
             color_continuous_scale=px.colors.sequential.Inferno,
             title="Flow of Faith: From Generation to Digital Habit"
@@ -232,22 +263,21 @@ with tab2:
         st.plotly_chart(fig_parcats, use_container_width=True)
         
     with col_d:
-        # VISUAL 6: Sunburst (Hierarchy)
+        # VISUAL 6: Sunburst
         st.subheader("5. Engagement Hierarchy")
-        # Ensure we don't have Unspecified in the path for clean visual
-        sun_df = df_filtered[df_filtered['how_important_is_the_bible_in_your_life'] != "Unspecified"]
+        sun_df = df_filtered[df_filtered[cols['bible_imp']] != "Unspecified"]
         
         fig_sun = px.sunburst(
             sun_df, 
-            path=['User Type', 'how_important_is_the_bible_in_your_life'], 
-            values='weight_final',
+            path=['User Type', cols['bible_imp']], 
+            values=cols['weight'],
             title="User Segments Breakdown"
         )
         st.plotly_chart(fig_sun, use_container_width=True)
         
     # VISUAL 7: Donut Chart
     st.subheader("6. The 'Hybrid' Believer Share")
-    fig_donut = px.pie(df_filtered, names='User Type', values='weight_final', hole=0.5, title="Market Share of Digital vs Physical")
+    fig_donut = px.pie(df_filtered, names='User Type', values=cols['weight'], hole=0.5, title="Market Share of Digital vs Physical")
     st.plotly_chart(fig_donut, use_container_width=True)
 
 # --- TAB 3: DEMOGRAPHICS (The "Who") ---
@@ -257,23 +287,21 @@ with tab3:
     # VISUAL 8: Animated Bubble Chart
     st.subheader("7. Generational Clusters (Animated by Year)")
     
-    # Aggregate for bubble
-    bubble_df = df.groupby(['decade_in_which_respondent_was_born', 'year_in_which_survey_was_completed']).agg({
+    bubble_df = df.groupby([cols['decade'], cols['year']]).agg({
         'online_score': 'mean',
         'in_person_score': 'mean',
         'bible_score': 'mean',
-        'weight_final': 'sum'
+        cols['weight']: 'sum'
     }).reset_index()
     
-    # Filter out Unspecified decades for the bubble chart
-    bubble_df = bubble_df[bubble_df['decade_in_which_respondent_was_born'] != "Unspecified"]
+    bubble_df = bubble_df[bubble_df[cols['decade']] != "Unspecified"]
     
     fig_bubble = px.scatter(
         bubble_df, 
         x="online_score", y="in_person_score", 
-        size="weight_final", color="bible_score",
-        animation_frame="year_in_which_survey_was_completed",
-        hover_name="decade_in_which_respondent_was_born",
+        size=cols['weight'], color="bible_score",
+        animation_frame=cols['year'],
+        hover_name=cols['decade'],
         range_x=[1,6], range_y=[1,6],
         title="The Matrix: Online vs In-Person Attendance by Generation",
         labels={"online_score": "Online Frequency (Score)", "in_person_score": "In-Person Frequency (Score)"}
@@ -285,20 +313,20 @@ with tab3:
     with col_e:
         # VISUAL 9: Grouped Bar
         st.subheader("8. Attendance Gap")
-        gap_df = df_filtered[df_filtered['decade_in_which_respondent_was_born'] != "Unspecified"]
-        gap_df = gap_df.groupby('decade_in_which_respondent_was_born')[['online_score', 'in_person_score']].mean().reset_index()
+        gap_df = df_filtered[df_filtered[cols['decade']] != "Unspecified"]
+        gap_df = gap_df.groupby(cols['decade'])[['online_score', 'in_person_score']].mean().reset_index()
         
-        gap_melt = gap_df.melt(id_vars='decade_in_which_respondent_was_born', var_name='Type', value_name='Score')
-        fig_bar = px.bar(gap_melt, x='decade_in_which_respondent_was_born', y='Score', color='Type', barmode='group', title="Online vs In-Person Intensity")
+        gap_melt = gap_df.melt(id_vars=cols['decade'], var_name='Type', value_name='Score')
+        fig_bar = px.bar(gap_melt, x=cols['decade'], y='Score', color='Type', barmode='group', title="Online vs In-Person Intensity")
         st.plotly_chart(fig_bar, use_container_width=True)
 
     with col_f:
         # VISUAL 10: Trend Line
         st.subheader("9. The Scripture 'Cliff'")
-        line_df = df_filtered[df_filtered['decade_in_which_respondent_was_born'] != "Unspecified"]
-        line_df = line_df.groupby('decade_in_which_respondent_was_born')['bible_score'].mean().reset_index()
+        line_df = df_filtered[df_filtered[cols['decade']] != "Unspecified"]
+        line_df = line_df.groupby(cols['decade'])['bible_score'].mean().reset_index()
         
-        fig_line = px.line(line_df, x='decade_in_which_respondent_was_born', y='bible_score', markers=True, title="Avg Scripture Importance by Decade")
+        fig_line = px.line(line_df, x=cols['decade'], y='bible_score', markers=True, title="Avg Scripture Importance by Decade")
         st.plotly_chart(fig_line, use_container_width=True)
 
 # --- TAB 4: DEEP DIVE (Data Science) ---
@@ -316,28 +344,26 @@ with tab4:
         st.plotly_chart(fig_heat, use_container_width=True)
         
     with col_h:
-        # VISUAL 12: 100% Stacked Bar (Worldview)
+        # VISUAL 12: Stacked Bar
         st.subheader("11. Happiness vs Scripture (Detailed)")
         
-        stack_data = df_filtered[df_filtered["how_important_is_the_bible_in_your_life"] != "Unspecified"]
+        stack_data = df_filtered[df_filtered[cols['bible_imp']] != "Unspecified"]
         
-        # Grouping for stacked bar
-        stack_df = stack_data.groupby(['how_important_is_the_bible_in_your_life', 'generally_how_happy_are_you_with_your_life_these_days_are_you'])['weight_final'].sum().reset_index()
-        # Calculate percentages
-        stack_df['percentage'] = stack_df.groupby('how_important_is_the_bible_in_your_life')['weight_final'].transform(lambda x: x / x.sum())
+        stack_df = stack_data.groupby([cols['bible_imp'], cols['happiness']])[cols['weight']].sum().reset_index()
+        stack_df['percentage'] = stack_df.groupby(cols['bible_imp'])[cols['weight']].transform(lambda x: x / x.sum())
         
-        fig_stack = px.bar(stack_df, x="how_important_is_the_bible_in_your_life", y="percentage", 
-                           color="generally_how_happy_are_you_with_your_life_these_days_are_you", 
+        fig_stack = px.bar(stack_df, x=cols['bible_imp'], y="percentage", 
+                           color=cols['happiness'], 
                            title="Happiness Composition by Scripture Importance",
-                           category_orders={"how_important_is_the_bible_in_your_life": ["Not at all important", "Somewhat important", "Extremely important"]})
+                           category_orders={cols['bible_imp']: ["Not at all important", "Somewhat important", "Extremely important"]})
         st.plotly_chart(fig_stack, use_container_width=True)
     
-    # VISUAL 13 (Bonus): Ridgeline / Histogram
+    # VISUAL 13: Histogram
     st.subheader("12. Age Distribution by Happiness")
-    hist_data = df_filtered[df_filtered["decade_in_which_respondent_was_born"] != "Unspecified"]
-    fig_hist = px.histogram(hist_data, x="decade_in_which_respondent_was_born", color="generally_how_happy_are_you_with_your_life_these_days_are_you", 
+    hist_data = df_filtered[df_filtered[cols['decade']] != "Unspecified"]
+    fig_hist = px.histogram(hist_data, x=cols['decade'], color=cols['happiness'], 
                             barmode="overlay", title="Who are the happy ones?")
     st.plotly_chart(fig_hist, use_container_width=True)
 
 st.markdown("---")
-st.caption("Dashboard Prototype generated for Portfolio | Data Source: Weighted Survey Core")
+st.caption("Dashboard Prototype generated for Portfolio | Data Source: Cleaned Survey Data")
