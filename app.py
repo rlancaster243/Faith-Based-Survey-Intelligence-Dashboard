@@ -36,7 +36,7 @@ st.markdown("""
 @st.cache_data
 def load_data():
     # Load dataset (Ensure the file is in the same directory)
-    df = pd.read_csv('rls_tableau_weighted_core1.csv')
+    df = pd.read_csv('cleaned_survey_data.csv')
     
     # --- Mappings for Ordinal Variables to Numeric Scores (0-5 Scale) ---
     # This allows us to calculate averages for Radar charts and Heatmaps
