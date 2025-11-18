@@ -40,7 +40,7 @@ def load_data():
     # Robust file path handling for local/cloud execution
     current_dir = os.path.dirname(os.path.abspath(__file__))
     # USING THE ORIGINAL UPLOADED FILENAME
-    file_path = os.path.join(current_dir, 'cleaned_survey_dataset.csv')
+    file_path = os.path.join(current_dir, 'cleaned_survey_data.csv')
     
     # Check if file exists
     if not os.path.exists(file_path):
