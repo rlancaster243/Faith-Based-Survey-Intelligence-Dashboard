@@ -11,21 +11,29 @@ import os
 st.set_page_config(
     page_title="Digital Discipleship Insights",
     page_icon="📖",
-    layout="wide",  # wide is fine; Streamlit will still shrink on mobile
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for desktop + mobile responsiveness
+# Custom CSS for desktop + mobile responsiveness and metric styling
 st.markdown("""
 <style>
-    /* Metric cards */
-    .metric-card {
+    /* Style Streamlit metric containers directly */
+    [data-testid="metric-container"] {
         background-color: #f0f2f6;
         border-radius: 10px;
         padding: 20px;
         text-align: center;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
         margin-bottom: 0.75rem;
+    }
+
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem;
+    }
+
+    [data-testid="stMetricValue"] {
+        font-size: 1.6rem;
     }
 
     /* Tab label styling */
@@ -36,7 +44,6 @@ st.markdown("""
 
     /* Global layout tweaks for mobile screens */
     @media (max-width: 768px) {
-        /* Reduce padding on the main container so content fits better */
         .block-container {
             padding-left: 0.5rem;
             padding-right: 0.5rem;
@@ -44,18 +51,15 @@ st.markdown("""
             padding-bottom: 0.75rem;
         }
 
-        /* Slightly smaller tab labels on mobile */
         div.stTabs > div > div > div > div {
             font-size: 1rem;
         }
 
-        /* Make text blocks a bit more compact on mobile */
         h1, h2, h3 {
             line-height: 1.2;
         }
 
-        /* Slightly tighter metric cards on mobile */
-        .metric-card {
+        [data-testid="metric-container"] {
             padding: 12px;
         }
     }
@@ -99,7 +103,7 @@ def load_data():
     required_values = list(cols.values())
     missing_cols = [c for c in required_values if c not in df.columns]
     if missing_cols:
-        st.error(f" Missing columns in CSV: {missing_cols}")
+        st.error(f"❌ Missing columns in CSV: {missing_cols}")
         st.write("Available columns:", df.columns.tolist())
         return pd.DataFrame()
 
@@ -234,21 +238,13 @@ with tab1:
         ) * 100
     avg_happy = df_filtered['happiness_score'].mean()
     
-    # Wrap metrics in metric cards so they look clean on both desktop and mobile
+    # Metrics (no wrapper div, styled via CSS)
     with col1:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.metric("Total Population Rep.", f"{int(total_pop):,}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
     with col2:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.metric("High Scripture Engagement", f"{high_bible_pct:.1f}%")
-        st.markdown('</div>', unsafe_allow_html=True)
-
     with col3:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.metric("Avg Happiness Score (1-3)", f"{avg_happy:.2f}")
-        st.markdown('</div>', unsafe_allow_html=True)
     
     col_a, col_b = st.columns([1, 1])
     
